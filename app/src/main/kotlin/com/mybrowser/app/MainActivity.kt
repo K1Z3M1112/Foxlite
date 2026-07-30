@@ -67,6 +67,9 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import org.mozilla.geckoview.AllowOrDeny
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
@@ -74,6 +77,7 @@ import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.WebExtension
+import org.mozilla.geckoview.WebExtensionController
 import java.io.ByteArrayOutputStream
 import java.net.URL
 import java.security.MessageDigest
@@ -86,6 +90,35 @@ const val INTERNAL_HOME_URL = "about:blank"
 const val MAX_TABS = 15
 
 // ═══════════════════════════════════════════════════════════
+// 0. Design Tokens — ชุดสีและระยะกลางของแอป (Foxlite look)
+// ═══════════════════════════════════════════════════════════
+object FoxColors {
+    val Background = Color(0xFF0F0F12)
+    val Surface = Color(0xFF1A1A1E)
+    val SurfaceElevated = Color(0xFF232327)
+    val SurfaceHigh = Color(0xFF2C2C31)
+    val Outline = Color(0xFF35353B)
+    val OnSurface = Color(0xFFF2F1EF)
+    val OnSurfaceMuted = Color(0xFFA0A0A8)
+    val OnSurfaceFaint = Color(0xFF6E6E76)
+
+    // สีแบรนด์: ส้มจิ้งจอก (Fox) เป็นสีหลัก, ใช้ทั้งแอปแทนสีสุ่ม
+    val Accent = Color(0xFFFF7A3D)
+    val AccentMuted = Color(0xFFFFA773)
+    val AccentContainer = Color(0xFF3A2416)
+
+    val Incognito = Color(0xFF8B5CF6)
+    val IncognitoContainer = Color(0xFF2A1F3D)
+    val Danger = Color(0xFFEF5350)
+    val Success = Color(0xFF4CAF7D)
+}
+
+val FoxShapeSmall = RoundedCornerShape(10.dp)
+val FoxShapeMedium = RoundedCornerShape(16.dp)
+val FoxShapeLarge = RoundedCornerShape(24.dp)
+val FoxShapePill = RoundedCornerShape(50)
+
+// ═══════════════════════════════════════════════════════════
 // 1. GeckoRuntime Singleton Manager
 // ═══════════════════════════════════════════════════════════
 object GeckoRuntimeManager {
@@ -93,7 +126,20 @@ object GeckoRuntimeManager {
 
     fun get(context: Context): GeckoRuntime {
         if (runtime == null) {
-            runtime = GeckoRuntime.create(context.applicationContext)
+            val created = GeckoRuntime.create(context.applicationContext)
+            // สำคัญ: ถ้าไม่ตั้งค่า PromptDelegate, GeckoView จะไม่มีใครตอบรับ
+            // คำขอสิทธิ์ตอนติดตั้งส่วนขยาย และจะปฏิเสธการติดตั้งไปเงียบๆ (ค่า default = DENY)
+            created.webExtensionController.promptDelegate = object : WebExtensionController.PromptDelegate {
+                override fun onInstallPrompt(
+                    extension: WebExtension,
+                    permissions: Array<String>,
+                    origins: Array<String>
+                ): GeckoResult<AllowOrDeny>? {
+                    // ผู้ใช้กดติดตั้งเองจากร้านค้าในแอปอยู่แล้ว จึงอนุมัติสิทธิ์ให้อัตโนมัติ
+                    return GeckoResult.fromValue(AllowOrDeny.ALLOW)
+                }
+            }
+            runtime = created
         }
         return runtime!!
     }
@@ -306,6 +352,34 @@ object BrowserSecurity {
     }
 }
 
+// ═══════════════════════════════════════════════════════════
+// ระบบขออนุญาตนำทาง / กันฉีด URL ก่อนอนุญาตให้โหลดหรือ redirect
+// ═══════════════════════════════════════════════════════════
+object NavigationGuard {
+    // scheme ที่อนุญาตให้เปิดได้ตามปกติ
+    private val ALLOWED_SCHEMES = setOf("http", "https", "about", "blob", "data")
+
+    // scheme ที่มักถูกใช้เป็นช่องทางโจมตี (JS injection, intent hijacking, local-file/content leak)
+    private val BLOCKED_SCHEMES = setOf(
+        "javascript", "intent", "file", "content", "android-app", "chrome", "resource"
+    )
+
+    data class Verdict(val allowed: Boolean, val reason: String? = null)
+
+    fun evaluate(rawUri: String?): Verdict {
+        if (rawUri.isNullOrBlank()) return Verdict(true)
+        val scheme = try { Uri.parse(rawUri).scheme?.lowercase() } catch (e: Exception) { null }
+        return when {
+            scheme == null -> Verdict(true)
+            scheme in BLOCKED_SCHEMES -> Verdict(false, "บล็อกลิงก์ที่อาจไม่ปลอดภัย ($scheme://)")
+            scheme in ALLOWED_SCHEMES -> Verdict(true)
+            else -> Verdict(false, "บล็อก scheme ที่ไม่รู้จัก ($scheme://)")
+        }
+    }
+
+    fun isSafe(rawUri: String?): Boolean = evaluate(rawUri).allowed
+}
+
 object PinSecurity {
     fun generateSalt(): String {
         val bytes = ByteArray(16)
@@ -357,7 +431,22 @@ class MainActivity : ComponentActivity() {
         prefs = getSharedPreferences("BrowserGecko", Context.MODE_PRIVATE)
 
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme()) {
+            val foxColorScheme = darkColorScheme(
+                primary = FoxColors.Accent,
+                onPrimary = FoxColors.OnSurface,
+                primaryContainer = FoxColors.AccentContainer,
+                onPrimaryContainer = FoxColors.AccentMuted,
+                secondary = FoxColors.Incognito,
+                background = FoxColors.Background,
+                onBackground = FoxColors.OnSurface,
+                surface = FoxColors.Surface,
+                onSurface = FoxColors.OnSurface,
+                surfaceVariant = FoxColors.SurfaceElevated,
+                onSurfaceVariant = FoxColors.OnSurfaceMuted,
+                outline = FoxColors.Outline,
+                error = FoxColors.Danger
+            )
+            MaterialTheme(colorScheme = foxColorScheme) {
                 BrowserApp(prefs = prefs, onExitApp = { finishAffinity() })
             }
         }
@@ -471,7 +560,26 @@ fun BrowserScreen(prefs: SharedPreferences) {
     var bookmarksList by remember { mutableStateOf(dbHelper.getAllBookmarks()) }
     fun refreshBookmarks() { bookmarksList = dbHelper.getAllBookmarks() }
 
+    // ค้นหาแบบ debounce: รอให้ผู้ใช้หยุดพิมพ์ก่อนค่อย query SQLite ในเธรดพื้นหลัง
+    // ป้องกันอาการกระตุกขณะพิมพ์ในช่อง URL bar
+    LaunchedEffect(urlBarText) {
+        val query = urlBarText
+        if (query.isBlank()) {
+            showUrlSuggestions = false
+            return@LaunchedEffect
+        }
+        delay(200)
+        val results = withContext(Dispatchers.IO) { dbHelper.searchHistoryAndBookmarks(query) }
+        urlSuggestions = results
+        showUrlSuggestions = results.isNotEmpty()
+    }
+
     fun navigate(target: String) {
+        val verdict = NavigationGuard.evaluate(target)
+        if (!verdict.allowed) {
+            Toast.makeText(context, "🚫 ${verdict.reason}", Toast.LENGTH_SHORT).show()
+            return
+        }
         val tab = tabs.getOrNull(currentTab) ?: return
         tab.url = target
         val session = tab.createOrGetSession(context)
@@ -524,11 +632,11 @@ fun BrowserScreen(prefs: SharedPreferences) {
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().background(Color(0xFF121212))) {
+    Column(modifier = Modifier.fillMaxSize().background(FoxColors.Background)) {
         if (tabs.getOrNull(currentTab)?.isIncognito == true) {
-            Surface(color = Color(0xFF3A2A55), modifier = Modifier.fillMaxWidth()) {
+            Surface(color = FoxColors.IncognitoContainer, modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    "🕶️ โหมดไม่ระบุตัวตน (Gecko Engine)", color = Color.White,
+                    "🕶️ โหมดไม่ระบุตัวตน (Gecko Engine)", color = FoxColors.OnSurface,
                     fontSize = 11.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
                 )
             }
@@ -542,16 +650,12 @@ fun BrowserScreen(prefs: SharedPreferences) {
                         bookmarks = bookmarksList,
                         onSearch = { query ->
                             val target = BrowserSecurity.sanitizeUrl(query, searchEngine)
-                            activeTab.url = target
                             urlBarText = target
-                            val session = activeTab.createOrGetSession(context)
-                            session.loadUri(target)
+                            navigate(target)
                         },
                         onSelectBookmark = { url ->
-                            activeTab.url = url
                             urlBarText = url
-                            val session = activeTab.createOrGetSession(context)
-                            session.loadUri(url)
+                            navigate(url)
                         }
                     )
                 } else {
@@ -568,11 +672,16 @@ fun BrowserScreen(prefs: SharedPreferences) {
                             activeTab.title = if (activeTab.url == INTERNAL_HOME_URL) "หน้าแรก" else title ?: "Web Page"
                             persistTabs()
                             if (!activeTab.isIncognito && activeTab.url != INTERNAL_HOME_URL) {
-                                dbHelper.insertHistory(activeTab.url, activeTab.title)
+                                val urlSnapshot = activeTab.url
+                                val titleSnapshot = activeTab.title
+                                thread { dbHelper.insertHistory(urlSnapshot, titleSnapshot) }
                             }
                         },
                         onProgressChanged = { p -> progress = p },
-                        onNavStateChanged = { back, fwd -> canGoBack = back; canGoForward = fwd }
+                        onNavStateChanged = { back, fwd -> canGoBack = back; canGoForward = fwd },
+                        onBlockedNavigation = { _, reason ->
+                            Toast.makeText(context, "🚫 $reason", Toast.LENGTH_SHORT).show()
+                        }
                     )
                 }
             }
@@ -586,10 +695,12 @@ fun BrowserScreen(prefs: SharedPreferences) {
                     onAddIncognitoTab = { addTab(incognito = true); showMenu = false },
                     onAddBookmark = {
                         val currentUrl = menuTab?.url ?: ""
+                        val currentTitle = menuTab?.title ?: currentUrl
                         if (currentUrl.isNotBlank() && currentUrl != INTERNAL_HOME_URL) {
-                            if (dbHelper.isBookmarked(currentUrl)) Toast.makeText(context, "ℹ️ บุ๊กมาร์กนี้มีอยู่แล้ว", Toast.LENGTH_SHORT).show()
-                            else {
-                                dbHelper.insertBookmark(currentUrl, menuTab?.title ?: currentUrl)
+                            if (dbHelper.isBookmarked(currentUrl)) {
+                                Toast.makeText(context, "ℹ️ บุ๊กมาร์กนี้มีอยู่แล้ว", Toast.LENGTH_SHORT).show()
+                            } else {
+                                dbHelper.insertBookmark(currentUrl, currentTitle)
                                 refreshBookmarks()
                                 Toast.makeText(context, "📌 เพิ่มบุ๊กมาร์กเรียบร้อย", Toast.LENGTH_SHORT).show()
                             }
@@ -639,13 +750,7 @@ fun BrowserScreen(prefs: SharedPreferences) {
         Box {
             BrowserBottomToolbar(
                 urlBarText = urlBarText,
-                onUrlBarChange = { text ->
-                    urlBarText = text
-                    if (text.isNotBlank()) {
-                        urlSuggestions = dbHelper.searchHistoryAndBookmarks(text)
-                        showUrlSuggestions = urlSuggestions.isNotEmpty()
-                    } else showUrlSuggestions = false
-                },
+                onUrlBarChange = { text -> urlBarText = text },
                 onGo = { navigate(BrowserSecurity.sanitizeUrl(urlBarText, searchEngine)) },
                 onBack = { tabs.getOrNull(currentTab)?.geckoSession?.goBack() },
                 onForward = { tabs.getOrNull(currentTab)?.geckoSession?.goForward() },
@@ -658,21 +763,21 @@ fun BrowserScreen(prefs: SharedPreferences) {
             )
 
             if (showUrlSuggestions && urlSuggestions.isNotEmpty()) {
-                Surface(modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter).offset(y = (-64).dp), color = Color(0xFF252525), tonalElevation = 8.dp) {
+                Surface(modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter).offset(y = (-64).dp), color = FoxColors.SurfaceElevated, tonalElevation = 8.dp) {
                     Column {
                         urlSuggestions.forEach { (title, url) ->
                             Row(
                                 modifier = Modifier.fillMaxWidth().clickable { navigate(BrowserSecurity.sanitizeUrl(url, searchEngine)) }.padding(horizontal = 12.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(Icons.Default.History, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Default.History, contentDescription = null, tint = FoxColors.OnSurfaceMuted, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(8.dp))
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(title.ifBlank { url }, color = Color.White, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Text(url, color = Color.Gray, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(title.ifBlank { url }, color = FoxColors.OnSurface, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(url, color = FoxColors.OnSurfaceMuted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                             }
-                            HorizontalDivider(color = Color(0xFF333333))
+                            HorizontalDivider(color = FoxColors.Outline)
                         }
                     }
                 }
@@ -690,7 +795,8 @@ fun CleanGeckoView(
     onUrlChanged: (String) -> Unit,
     onTitleChanged: (String?) -> Unit,
     onProgressChanged: (Int) -> Unit,
-    onNavStateChanged: (Boolean, Boolean) -> Unit
+    onNavStateChanged: (Boolean, Boolean) -> Unit,
+    onBlockedNavigation: (String, String) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
     val session = remember(tabState.id) { tabState.createOrGetSession(context) }
@@ -720,6 +826,11 @@ fun CleanGeckoView(
                 onNavStateChanged(false, canGoForward)
             }
             override fun onLoadRequest(session: GeckoSession, request: GeckoSession.NavigationDelegate.LoadRequest): GeckoResult<AllowOrDeny>? {
+                val verdict = NavigationGuard.evaluate(request.uri)
+                if (!verdict.allowed) {
+                    onBlockedNavigation(request.uri, verdict.reason ?: "ลิงก์นี้ถูกบล็อกเพื่อความปลอดภัย")
+                    return GeckoResult.deny()
+                }
                 return GeckoResult.allow()
             }
         }
@@ -820,30 +931,37 @@ fun ExtensionStoreDialog(geckoRuntime: GeckoRuntime, onDismiss: () -> Unit) {
                 } else if (selectedTab == 0) {
                     Column {
                         LazyColumn(modifier = Modifier.weight(1f)) {
-                            items(RECOMMENDED_EXTENSIONS) { item ->
+                            items(RECOMMENDED_EXTENSIONS, key = { it.name }) { item ->
                                 val isInstalled = installedExtensions.any { it.id == item.name || it.metaData.name == item.name }
                                 Card(
                                     modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF252525))
+                                    shape = FoxShapeMedium,
+                                    colors = CardDefaults.cardColors(containerColor = FoxColors.SurfaceHigh)
                                 ) {
-                                    Column(modifier = Modifier.padding(12.dp)) {
-                                        Text(item.name, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                    Column(modifier = Modifier.padding(14.dp)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.Extension, contentDescription = null, tint = FoxColors.Accent, modifier = Modifier.size(16.dp))
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(item.name, color = FoxColors.OnSurface, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                        }
                                         Spacer(Modifier.height(4.dp))
-                                        Text(item.description, color = Color.Gray, fontSize = 12.sp)
-                                        Spacer(Modifier.height(8.dp))
+                                        Text(item.description, color = FoxColors.OnSurfaceMuted, fontSize = 12.sp)
+                                        Spacer(Modifier.height(10.dp))
                                         Button(
                                             onClick = { installFromUrl(item.downloadUrl) },
                                             enabled = !isInstalled,
+                                            shape = FoxShapeSmall,
+                                            colors = ButtonDefaults.buttonColors(containerColor = FoxColors.Accent, disabledContainerColor = FoxColors.Outline),
                                             modifier = Modifier.align(Alignment.End)
                                         ) {
-                                            Text(if (isInstalled) "ติดตั้งแล้ว" else "ติดตั้งส่วนขยาย")
+                                            Text(if (isInstalled) "ติดตั้งแล้ว" else "ติดตั้งส่วนขยาย", fontSize = 13.sp)
                                         }
                                     }
                                 }
                             }
                         }
                         Spacer(Modifier.height(8.dp))
-                        Text("ติดตั้งจากลิงก์ .XPI โดยตรง:", fontSize = 12.sp, color = Color.LightGray)
+                        Text("ติดตั้งจากลิงก์ .XPI โดยตรง:", fontSize = 12.sp, color = FoxColors.OnSurfaceMuted)
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             OutlinedTextField(
                                 value = customXpiUrl,
@@ -861,23 +979,25 @@ fun ExtensionStoreDialog(geckoRuntime: GeckoRuntime, onDismiss: () -> Unit) {
                     }
                 } else {
                     if (installedExtensions.isEmpty()) {
-                        Text("ยังไม่มีส่วนขยายที่ติดตั้ง", modifier = Modifier.align(Alignment.Center), color = Color.Gray)
+                        Text("ยังไม่มีส่วนขยายที่ติดตั้ง", modifier = Modifier.align(Alignment.Center), color = FoxColors.OnSurfaceMuted)
                     } else {
                         LazyColumn {
-                            items(installedExtensions) { ext ->
+                            items(installedExtensions, key = { it.id }) { ext ->
                                 Row(
                                     modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
+                                    Icon(Icons.Default.Extension, contentDescription = null, tint = FoxColors.Accent, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(10.dp))
                                     Column(modifier = Modifier.weight(1f)) {
-                                        Text(ext.metaData.name ?: ext.id, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                                        Text("เวอร์ชัน: ${ext.metaData.version ?: "1.0"}", color = Color.Gray, fontSize = 11.sp)
+                                        Text(ext.metaData.name ?: ext.id, color = FoxColors.OnSurface, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                                        Text("เวอร์ชัน: ${ext.metaData.version ?: "1.0"}", color = FoxColors.OnSurfaceMuted, fontSize = 11.sp)
                                     }
                                     IconButton(onClick = { uninstallExt(ext) }) {
-                                        Icon(Icons.Default.Delete, contentDescription = "Uninstall", tint = Color.Red)
+                                        Icon(Icons.Default.Delete, contentDescription = "ถอนการติดตั้ง", tint = FoxColors.Danger, modifier = Modifier.size(19.dp))
                                     }
                                 }
-                                HorizontalDivider(color = Color(0xFF333333))
+                                HorizontalDivider(color = FoxColors.Outline)
                             }
                         }
                     }
@@ -894,76 +1014,179 @@ fun ExtensionStoreDialog(geckoRuntime: GeckoRuntime, onDismiss: () -> Unit) {
 @Composable
 fun CustomHomePage(bookmarks: List<BookmarkItem>, onSearch: (String) -> Unit, onSelectBookmark: (String) -> Unit) {
     var searchText by remember { mutableStateOf("") }
-    Column(modifier = Modifier.fillMaxSize().background(Color(0xFF121212)).padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Spacer(modifier = Modifier.height(40.dp))
-        Text("GECKO BROWSER", color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-        Spacer(modifier = Modifier.height(30.dp))
+    Column(
+        modifier = Modifier.fillMaxSize().background(FoxColors.Background).padding(horizontal = 20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Spacer(modifier = Modifier.height(56.dp))
+        Surface(modifier = Modifier.size(56.dp), shape = FoxShapeLarge, color = FoxColors.AccentContainer) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.Language, contentDescription = null, tint = FoxColors.Accent, modifier = Modifier.size(28.dp))
+            }
+        }
+        Spacer(modifier = Modifier.height(14.dp))
+        Text("FOXLITE", color = FoxColors.OnSurface, fontSize = 24.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
+        Spacer(modifier = Modifier.height(28.dp))
         OutlinedTextField(
-            value = searchText, onValueChange = { searchText = it }, modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-            placeholder = { Text("ค้นหาหรือพิมพ์ URL...", color = Color.Gray) }, singleLine = true, shape = RoundedCornerShape(24.dp),
-            colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = Color(0xFF1E1E1E), unfocusedContainerColor = Color(0xFF1E1E1E), focusedBorderColor = MaterialTheme.colorScheme.primary, unfocusedBorderColor = Color(0xFF333333)),
-            trailingIcon = { IconButton(onClick = { if (searchText.isNotBlank()) onSearch(searchText) }) { Icon(Icons.Default.Search, contentDescription = "Search", tint = Color.White) } },
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search), keyboardActions = KeyboardActions(onSearch = { if (searchText.isNotBlank()) onSearch(searchText) })
+            value = searchText, onValueChange = { searchText = it }, modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("ค้นหาหรือพิมพ์ URL...", color = FoxColors.OnSurfaceFaint, fontSize = 14.sp) },
+            singleLine = true, shape = FoxShapePill,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedContainerColor = FoxColors.SurfaceElevated,
+                unfocusedContainerColor = FoxColors.SurfaceElevated,
+                focusedBorderColor = FoxColors.Accent,
+                unfocusedBorderColor = FoxColors.Outline,
+                focusedTextColor = FoxColors.OnSurface,
+                unfocusedTextColor = FoxColors.OnSurface,
+                cursorColor = FoxColors.Accent
+            ),
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = FoxColors.OnSurfaceMuted, modifier = Modifier.size(18.dp)) },
+            trailingIcon = {
+                if (searchText.isNotBlank()) {
+                    IconButton(onClick = { onSearch(searchText) }) {
+                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "ไป", tint = FoxColors.Accent, modifier = Modifier.size(18.dp))
+                    }
+                }
+            },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { if (searchText.isNotBlank()) onSearch(searchText) })
         )
-        Spacer(modifier = Modifier.height(30.dp))
-        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Default.Bookmark, contentDescription = null, tint = Color.LightGray, modifier = Modifier.size(18.dp))
+        Spacer(modifier = Modifier.height(32.dp))
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.Bookmark, contentDescription = null, tint = FoxColors.OnSurfaceMuted, modifier = Modifier.size(16.dp))
             Spacer(modifier = Modifier.width(6.dp))
-            Text("บุ๊กมาร์กของคุณ", color = Color.LightGray, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Text("บุ๊กมาร์กของคุณ", color = FoxColors.OnSurfaceMuted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp)
         }
         Spacer(modifier = Modifier.height(16.dp))
-        if (bookmarks.isEmpty()) Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Text("ยังไม่มีบุ๊กมาร์ก", color = Color.DarkGray, fontSize = 13.sp) }
-        else LazyVerticalGrid(columns = GridCells.Fixed(4), modifier = Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            items(bookmarks) { item ->
-                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { onSelectBookmark(item.url) }.padding(4.dp)) {
-                    Surface(modifier = Modifier.size(52.dp), shape = RoundedCornerShape(16.dp), color = Color(0xFF252525)) {
-                        Box(contentAlignment = Alignment.Center) { Text(item.title.take(1).uppercase(), color = MaterialTheme.colorScheme.primary, fontSize = 20.sp, fontWeight = FontWeight.Bold) }
+        if (bookmarks.isEmpty()) {
+            Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                Text("ยังไม่มีบุ๊กมาร์ก", color = FoxColors.OnSurfaceFaint, fontSize = 13.sp)
+            }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(4),
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp)
+            ) {
+                items(bookmarks, key = { it.id }) { item ->
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.clickable { onSelectBookmark(item.url) }.padding(4.dp)
+                    ) {
+                        Surface(modifier = Modifier.size(54.dp), shape = FoxShapeMedium, color = FoxColors.SurfaceElevated) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text(item.title.take(1).uppercase(), color = FoxColors.Accent, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(item.title, color = FoxColors.OnSurface, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(item.title, color = Color.White, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
+        Spacer(modifier = Modifier.height(8.dp))
     }
 }
 
 @Composable
 fun BrowserBottomToolbar(urlBarText: String, onUrlBarChange: (String) -> Unit, onGo: () -> Unit, onBack: () -> Unit, onForward: () -> Unit, onRefresh: () -> Unit, onMenu: () -> Unit, onTabs: () -> Unit, canGoBack: Boolean, canGoForward: Boolean, progress: Int) {
-    Column(modifier = Modifier.background(Color(0xFF1E1E1E))) {
-        if (progress in 1..99) LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth().height(2.dp))
-        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack, enabled = canGoBack, modifier = Modifier.size(38.dp)) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = if (canGoBack) Color.White else Color.DarkGray) }
-            IconButton(onClick = onForward, enabled = canGoForward, modifier = Modifier.size(38.dp)) { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Forward", tint = if (canGoForward) Color.White else Color.DarkGray) }
-            OutlinedTextField(
-                value = urlBarText, onValueChange = onUrlBarChange, modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
-                placeholder = { Text("ค้นหา...", fontSize = 12.sp, color = Color.Gray) }, singleLine = true, textStyle = TextStyle(fontSize = 13.sp),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go), keyboardActions = KeyboardActions(onGo = { onGo() }),
-                trailingIcon = {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(end = 4.dp)) {
-                        IconButton(onClick = onRefresh, modifier = Modifier.size(28.dp)) { Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = Color.Gray, modifier = Modifier.size(16.dp)) }
-                        IconButton(onClick = onGo, modifier = Modifier.size(28.dp)) { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Go", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp)) }
+    Column(modifier = Modifier.background(FoxColors.Surface)) {
+        if (progress in 1..99) {
+            LinearProgressIndicator(
+                progress = { progress / 100f },
+                modifier = Modifier.fillMaxWidth().height(2.dp),
+                color = FoxColors.Accent,
+                trackColor = Color.Transparent
+            )
+        } else {
+            Spacer(Modifier.height(2.dp))
+        }
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack, enabled = canGoBack, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "ย้อนกลับ", tint = if (canGoBack) FoxColors.OnSurface else FoxColors.OnSurfaceFaint)
+            }
+            IconButton(onClick = onForward, enabled = canGoForward, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "ไปข้างหน้า", tint = if (canGoForward) FoxColors.OnSurface else FoxColors.OnSurfaceFaint)
+            }
+            Surface(
+                modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
+                shape = FoxShapePill,
+                color = FoxColors.SurfaceElevated
+            ) {
+                Row(modifier = Modifier.padding(start = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        if (urlBarText.startsWith("https://")) Icons.Default.Lock else Icons.Default.Public,
+                        contentDescription = null, tint = FoxColors.OnSurfaceFaint, modifier = Modifier.size(14.dp)
+                    )
+                    BasicUrlField(
+                        value = urlBarText,
+                        onValueChange = onUrlBarChange,
+                        onGo = onGo,
+                        modifier = Modifier.weight(1f).padding(horizontal = 6.dp)
+                    )
+                    IconButton(onClick = onRefresh, modifier = Modifier.size(30.dp)) {
+                        Icon(Icons.Default.Refresh, contentDescription = "รีเฟรช", tint = FoxColors.OnSurfaceMuted, modifier = Modifier.size(15.dp))
+                    }
+                    IconButton(onClick = onGo, modifier = Modifier.size(30.dp)) {
+                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "ไป", tint = FoxColors.Accent, modifier = Modifier.size(15.dp))
                     }
                 }
-            )
-            IconButton(onClick = onTabs, modifier = Modifier.size(38.dp)) { Icon(Icons.Default.Layers, contentDescription = "Tabs", tint = Color.White) }
-            IconButton(onClick = onMenu, modifier = Modifier.size(38.dp)) { Icon(Icons.Default.MoreVert, contentDescription = "Menu", tint = Color.White) }
+            }
+            IconButton(onClick = onTabs, modifier = Modifier.size(36.dp)) { Icon(Icons.Default.Layers, contentDescription = "แท็บ", tint = FoxColors.OnSurface) }
+            IconButton(onClick = onMenu, modifier = Modifier.size(36.dp)) { Icon(Icons.Default.MoreVert, contentDescription = "เมนู", tint = FoxColors.OnSurface) }
         }
     }
 }
 
 @Composable
+private fun BasicUrlField(value: String, onValueChange: (String) -> Unit, onGo: () -> Unit, modifier: Modifier = Modifier) {
+    TextField(
+        value = value, onValueChange = onValueChange, modifier = modifier,
+        placeholder = { Text("ค้นหาหรือพิมพ์ URL...", fontSize = 12.sp, color = FoxColors.OnSurfaceFaint) },
+        singleLine = true, textStyle = TextStyle(fontSize = 13.sp, color = FoxColors.OnSurface),
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+        keyboardActions = KeyboardActions(onGo = { onGo() }),
+        colors = TextFieldDefaults.colors(
+            focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
+            disabledContainerColor = Color.Transparent,
+            focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent,
+            cursorColor = FoxColors.Accent
+        )
+    )
+}
+
+@Composable
+private fun MenuDrawerItem(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, tint: Color = FoxColors.OnSurface, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.clickable(onClick = onClick).fillMaxWidth().padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(19.dp))
+        Spacer(Modifier.width(14.dp))
+        Text(label, color = tint, fontSize = 14.sp)
+    }
+}
+
+@Composable
 fun MenuDrawer(isDesktop: Boolean, onHome: () -> Unit, onAddTab: () -> Unit, onAddIncognitoTab: () -> Unit, onAddBookmark: () -> Unit, onOpenHistoryBookmarks: () -> Unit, onToggleDesktop: () -> Unit, onExtensionStore: () -> Unit, onSettings: () -> Unit, onExit: () -> Unit, modifier: Modifier = Modifier) {
-    Surface(modifier = modifier.width(230.dp), color = Color(0xFF252525), shape = MaterialTheme.shapes.medium, tonalElevation = 6.dp) {
-        Column(modifier = Modifier.padding(8.dp)) {
-            Text("🏠 หน้าแรก", Modifier.clickable(onClick = onHome).fillMaxWidth().padding(10.dp), color = Color.White)
-            Text("➕ แท็บใหม่", Modifier.clickable(onClick = onAddTab).fillMaxWidth().padding(10.dp), color = Color.White)
-            Text("🕶️ แท็บไม่ระบุตัวตน", Modifier.clickable(onClick = onAddIncognitoTab).fillMaxWidth().padding(10.dp), color = Color.White)
-            Text("⭐ เพิ่มลงบุ๊กมาร์ก", Modifier.clickable(onClick = onAddBookmark).fillMaxWidth().padding(10.dp), color = Color.White)
-            Text("📜 ประวัติ & บุ๊กมาร์ก", Modifier.clickable(onClick = onOpenHistoryBookmarks).fillMaxWidth().padding(10.dp), color = Color.White)
-            Text(if (isDesktop) "📱 มุมมองมือถือ" else "💻 มุมมองคอมพิวเตอร์", Modifier.clickable(onClick = onToggleDesktop).fillMaxWidth().padding(10.dp), color = Color.White)
-            Text("🧩 ส่วนขยาย / Extension Store", Modifier.clickable(onClick = onExtensionStore).fillMaxWidth().padding(10.dp), color = Color.White)
-            Text("⚙️ ตั้งค่า", Modifier.clickable(onClick = onSettings).fillMaxWidth().padding(10.dp), color = Color.White)
-            Text("🚪 ออกจากแอป", Modifier.clickable(onClick = onExit).fillMaxWidth().padding(10.dp), color = Color.White)
+    Surface(modifier = modifier.width(240.dp), color = FoxColors.SurfaceElevated, shape = FoxShapeMedium, tonalElevation = 8.dp, shadowElevation = 8.dp) {
+        Column(modifier = Modifier.padding(vertical = 6.dp)) {
+            MenuDrawerItem(Icons.Default.Home, "หน้าแรก", onClick = onHome)
+            MenuDrawerItem(Icons.Default.Add, "แท็บใหม่", onClick = onAddTab)
+            MenuDrawerItem(Icons.Default.VisibilityOff, "แท็บไม่ระบุตัวตน", tint = FoxColors.Incognito, onClick = onAddIncognitoTab)
+            HorizontalDivider(color = FoxColors.Outline, modifier = Modifier.padding(vertical = 4.dp))
+            MenuDrawerItem(Icons.Default.StarBorder, "เพิ่มลงบุ๊กมาร์ก", onClick = onAddBookmark)
+            MenuDrawerItem(Icons.Default.History, "ประวัติ & บุ๊กมาร์ก", onClick = onOpenHistoryBookmarks)
+            MenuDrawerItem(
+                if (isDesktop) Icons.Default.PhoneAndroid else Icons.Default.Computer,
+                if (isDesktop) "มุมมองมือถือ" else "มุมมองคอมพิวเตอร์",
+                onClick = onToggleDesktop
+            )
+            MenuDrawerItem(Icons.Default.Extension, "ส่วนขยาย (Extensions)", tint = FoxColors.Accent, onClick = onExtensionStore)
+            HorizontalDivider(color = FoxColors.Outline, modifier = Modifier.padding(vertical = 4.dp))
+            MenuDrawerItem(Icons.Default.Settings, "ตั้งค่า", onClick = onSettings)
+            MenuDrawerItem(Icons.Default.ExitToApp, "ออกจากแอป", tint = FoxColors.Danger, onClick = onExit)
         }
     }
 }
@@ -983,11 +1206,11 @@ fun FullScreenTabSwitcher(
     val safeInitial = currentTab.coerceIn(0, tabs.size - 1)
     val switcherPagerState = rememberPagerState(initialPage = safeInitial, pageCount = { tabs.size })
 
-    Surface(modifier = modifier, color = Color(0xFF0A0A0A), shape = RoundedCornerShape(20.dp), tonalElevation = 12.dp) {
+    Surface(modifier = modifier, color = FoxColors.Background, shape = RoundedCornerShape(20.dp), tonalElevation = 12.dp) {
         Column(modifier = Modifier.fillMaxSize()) {
             Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("แท็บทั้งหมด (${tabs.size})", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, contentDescription = "ปิด", tint = Color.White) }
+                Text("แท็บทั้งหมด (${tabs.size})", color = FoxColors.OnSurface, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, contentDescription = "ปิด", tint = FoxColors.OnSurface) }
             }
 
             HorizontalPager(
@@ -1000,18 +1223,18 @@ fun FullScreenTabSwitcher(
                 if (tab != null) {
                     Surface(
                         modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(24.dp)).clickable { onSelect(page) },
-                        color = Color(0xFF1B1B1B),
+                        color = FoxColors.SurfaceHigh,
                         border = if (page == currentTab) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null
                     ) {
                         Box(modifier = Modifier.fillMaxSize()) {
                             Column(modifier = Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-                                Icon(if (tab.url == INTERNAL_HOME_URL) Icons.Default.Home else Icons.Default.Language, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(48.dp))
+                                Icon(if (tab.url == INTERNAL_HOME_URL) Icons.Default.Home else Icons.Default.Language, contentDescription = null, tint = FoxColors.OnSurfaceMuted, modifier = Modifier.size(48.dp))
                                 Spacer(Modifier.height(8.dp))
-                                Text(tab.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                                Text(tab.url, color = Color.Gray, fontSize = 11.sp, maxLines = 1)
+                                Text(tab.title, color = FoxColors.OnSurface, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                                Text(tab.url, color = FoxColors.OnSurfaceMuted, fontSize = 11.sp, maxLines = 1)
                             }
                             IconButton(onClick = { onClose(page) }, modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
-                                Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                                Icon(Icons.Default.Close, contentDescription = "Close", tint = FoxColors.OnSurface)
                             }
                         }
                     }
@@ -1060,17 +1283,17 @@ fun DataManagementDialog(dbHelper: NativeBrowserDb, onSelectUrl: (String) -> Uni
         text = {
             Box(modifier = Modifier.height(350.dp).fillMaxWidth()) {
                 if (selectedTab == 0) {
-                    LazyColumn { items(historyList.size) { i -> val item = historyList[i]
+                    LazyColumn { items(historyList, key = { it.id }) { item ->
                         Row(modifier = Modifier.fillMaxWidth().clickable { onSelectUrl(item.url); onDismiss() }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(modifier = Modifier.weight(1f)) { Text(item.title, maxLines = 1, color = Color.White, fontSize = 14.sp); Text(item.url, maxLines = 1, color = Color.Gray, fontSize = 11.sp) }
-                            IconButton(onClick = { dbHelper.deleteHistoryById(item.id); historyList = dbHelper.getAllHistory() }) { Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.Gray, modifier = Modifier.size(18.dp)) }
+                            Column(modifier = Modifier.weight(1f)) { Text(item.title, maxLines = 1, color = FoxColors.OnSurface, fontSize = 14.sp); Text(item.url, maxLines = 1, color = FoxColors.OnSurfaceMuted, fontSize = 11.sp) }
+                            IconButton(onClick = { dbHelper.deleteHistoryById(item.id); historyList = dbHelper.getAllHistory() }) { Icon(Icons.Default.Delete, contentDescription = "ลบ", tint = FoxColors.OnSurfaceMuted, modifier = Modifier.size(18.dp)) }
                         }
                     } }
                 } else {
-                    LazyColumn { items(bookmarkList.size) { i -> val item = bookmarkList[i]
+                    LazyColumn { items(bookmarkList, key = { it.id }) { item ->
                         Row(modifier = Modifier.fillMaxWidth().clickable { onSelectUrl(item.url); onDismiss() }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(modifier = Modifier.weight(1f)) { Text(item.title, maxLines = 1, color = Color.White, fontSize = 14.sp); Text(item.url, maxLines = 1, color = Color.Gray, fontSize = 11.sp) }
-                            IconButton(onClick = { dbHelper.deleteBookmarkByUrl(item.url); bookmarkList = dbHelper.getAllBookmarks() }) { Icon(Icons.Default.Delete, contentDescription = "Remove", tint = Color.Gray, modifier = Modifier.size(18.dp)) }
+                            Column(modifier = Modifier.weight(1f)) { Text(item.title, maxLines = 1, color = FoxColors.OnSurface, fontSize = 14.sp); Text(item.url, maxLines = 1, color = FoxColors.OnSurfaceMuted, fontSize = 11.sp) }
+                            IconButton(onClick = { dbHelper.deleteBookmarkByUrl(item.url); bookmarkList = dbHelper.getAllBookmarks() }) { Icon(Icons.Default.Delete, contentDescription = "ลบ", tint = FoxColors.OnSurfaceMuted, modifier = Modifier.size(18.dp)) }
                         }
                     } }
                 }
