@@ -267,7 +267,6 @@ class TabState(
             val settings = GeckoSessionSettings.Builder()
                 .usePrivateMode(isIncognito)
                 .userAgentMode(if (isDesktop) GeckoSessionSettings.USER_AGENT_MODE_DESKTOP else GeckoSessionSettings.USER_AGENT_MODE_MOBILE)
-                .displayZoomMode(GeckoSessionSettings.DISPLAY_ZOOM_MODE_ENABLED)
                 .build()
 
             val session = GeckoSession(settings)
@@ -711,7 +710,7 @@ fun CleanGeckoView(
         }
 
         val navigationDelegate = object : GeckoSession.NavigationDelegate {
-            override fun onLocationChange(session: GeckoSession, url: String?, permissions: MutableList<GeckoSession.PermissionDelegate.ContentPermission>) {
+            override fun onLocationChange(session: GeckoSession, url: String?, permissions: MutableList<GeckoSession.PermissionDelegate.ContentPermission>, hasUserGesture: Boolean) {
                 url?.let { onUrlChanged(it) }
             }
             override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
