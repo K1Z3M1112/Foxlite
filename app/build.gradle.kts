@@ -52,5 +52,5 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview:1.7.5")
     implementation("org.jetbrains.compose.material:material-icons-extended:1.7.3")
     implementation("androidx.webkit:webkit:1.16.0")
-    implementation("org.mozilla.geckoview:geckoview:145.0.20251124145406")
+    implementation("org.mozilla.geckoview:geckoview:130.0.20240829075237")
 }
