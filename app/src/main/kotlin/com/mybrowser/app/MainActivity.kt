@@ -1063,7 +1063,14 @@ fun CleanGeckoView(
 ) {
     val context = LocalContext.current
     var customVideoView by remember { mutableStateOf<View?>(null) }
-    
+
+    // Tracks the latest session state (GeckoView 130 removed session.saveState();
+    // the current state must instead be cached from ProgressDelegate.onSessionStateChange).
+    val latestSessionStateHolder = remember { arrayOfNulls<GeckoSession.SessionState?>(1) }
+    // Tracks back/forward availability (GeckoSession no longer exposes canGoBack/canGoForward
+    // directly; they must be tracked from NavigationDelegate.onCanGoBack/onCanGoForward).
+    val navStateHolder = remember { booleanArrayOf(false, false) } // [canGoBack, canGoForward]
+
     // File Chooser state
     var pendingFilePrompt by remember { mutableStateOf<GeckoSession.PromptDelegate.FilePrompt?>(null) }
     var pendingFileResult by remember { mutableStateOf<GeckoResult<GeckoSession.PromptDelegate.PromptResponse>?>(null) }
@@ -1108,16 +1115,20 @@ fun CleanGeckoView(
                         onProgressChanged(progress)
                     }
 
-                    override fun onSessionCrash(session: GeckoSession) {
-                        Toast.makeText(ctx, "⚠️ หน้าเว็บมีปัญหา", Toast.LENGTH_SHORT).show()
-                        onCrashed()
+                    override fun onSessionStateChange(session: GeckoSession, sessionState: GeckoSession.SessionState) {
+                        latestSessionStateHolder[0] = sessionState
                     }
                 }
 
-                // --- 2. Content Delegate (Title, Context Menu, FullScreen) ---
+                // --- 2. Content Delegate (Title, Context Menu, FullScreen, Crash) ---
                 session.contentDelegate = object : GeckoSession.ContentDelegate {
                     override fun onTitleChange(session: GeckoSession, title: String?) {
                         onTitleChanged(title)
+                    }
+
+                    override fun onCrash(session: GeckoSession) {
+                        Toast.makeText(ctx, "⚠️ หน้าเว็บมีปัญหา", Toast.LENGTH_SHORT).show()
+                        onCrashed()
                     }
 
                     override fun onContextMenu(session: GeckoSession, screenX: Int, screenY: Int, element: GeckoSession.ContentDelegate.ContextElement) {
@@ -1170,8 +1181,7 @@ fun CleanGeckoView(
                         return GeckoResult.fromValue(AllowOrDeny.ALLOW)
                     }
 
-                    override fun onLocationChange(session: GeckoSession, url: String?, perms: List<GeckoSession.PermissionDelegate.ContentPermission>?) {
-                        super.onLocationChange(session, url, perms)
+                    override fun onLocationChange(session: GeckoSession, url: String?, perms: List<GeckoSession.PermissionDelegate.ContentPermission>, hasUserGesture: Boolean) {
                         if (url != null) {
                             onUrlChanged(url)
                             if (!isIncognito && url != INTERNAL_HOME_URL) {
@@ -1181,11 +1191,13 @@ fun CleanGeckoView(
                     }
 
                     override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
-                        onNavStateChanged(canGoBack, session.canGoForward)
+                        navStateHolder[0] = canGoBack
+                        onNavStateChanged(navStateHolder[0], navStateHolder[1])
                     }
 
                     override fun onCanGoForward(session: GeckoSession, canGoForward: Boolean) {
-                        onNavStateChanged(session.canGoBack, canGoForward)
+                        navStateHolder[1] = canGoForward
+                        onNavStateChanged(navStateHolder[0], canGoForward)
                     }
                 }
 
@@ -1223,8 +1235,7 @@ fun CleanGeckoView(
                 view.session?.settings?.userAgentMode = if (isDesktop) GeckoSessionSettings.USER_AGENT_MODE_DESKTOP else GeckoSessionSettings.USER_AGENT_MODE_MOBILE
             },
             onRelease = { view ->
-                val state = view.session?.saveState()
-                onSuspend(state, null) // GeckoView snapshot is asynchronous, omitting here for simplicity
+                onSuspend(latestSessionStateHolder[0], null) // GeckoView snapshot is asynchronous, omitting here for simplicity
                 view.session?.close()
                 view.releaseSession()
             }
