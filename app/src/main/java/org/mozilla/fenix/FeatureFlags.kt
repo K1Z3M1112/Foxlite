@@ -35,6 +35,7 @@ object FeatureFlags {
      * Disabled to reduce background network fetches, image loading, and homescreen
      * RecyclerView rendering cost (RAM Saver build).
      */
+    @Suppress("UNUSED_PARAMETER")
     fun isPocketRecommendationsFeatureEnabled(context: Context): Boolean {
         return false
     }
