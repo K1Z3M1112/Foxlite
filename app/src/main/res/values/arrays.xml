@@ -1,0 +1,33 @@
+<resources>
+    <string-array name="gpu_drivers">
+        <item>Turnip 26.1.0 (Adreno)</item>
+        <item>Virgl 23.1.9</item>
+        <item>Zink 22.2.5</item>
+        <item>Vortek 2.1 (Mali)</item>
+        <item>Gladio 1.0</item>
+    </string-array>
+
+    <string-array name="gpu_driver_ids">
+        <item>turnip-26.1.0</item>
+        <item>virgl-23.1.9</item>
+        <item>zink-22.2.5</item>
+        <item>vortek-2.1</item>
+        <item>gladio-1.0</item>
+    </string-array>
+
+    <string-array name="dx_wrappers">
+        <item>DXVK 2.4.1 (D3D9/10/11)</item>
+        <item>DXVK 1.10.3 (D3D9/10/11)</item>
+        <item>D8VK 1.0 (D3D8)</item>
+        <item>D7VK 1.11 (D3D7)</item>
+        <item>VKD3D-Proton 2.14.1 (D3D12)</item>
+    </string-array>
+
+    <string-array name="dx_wrapper_ids">
+        <item>dxvk-2.4.1</item>
+        <item>dxvk-1.10.3</item>
+        <item>d8vk-1.0</item>
+        <item>d7vk-1.11</item>
+        <item>vkd3d-2.14.1</item>
+    </string-array>
+</resources>

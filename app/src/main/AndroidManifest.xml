@@ -1,0 +1,26 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-feature android:name="android.hardware.vulkan.version" android:required="false"/>
+    <application
+        android:allowBackup="false"
+        android:label="Native Win Runtime"
+        android:theme="@style/AppTheme">
+        <!--
+          No android:screenOrientation and no orientation/screenSize in
+          configChanges: the system recreates the activity on rotation,
+          which lets Android pick res/layout (portrait) vs res/layout-land
+          (landscape) automatically.
+        -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false"
+            android:parentActivityName=".MainActivity"/>
+    </application>
+</manifest>

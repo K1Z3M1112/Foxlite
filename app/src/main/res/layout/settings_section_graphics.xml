@@ -1,0 +1,41 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/bg_panel"
+    android:padding="14dp"
+    android:layout_marginBottom="14dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="GRAPHICS"
+        android:textColor="@color/accent"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:letterSpacing="0.08"
+        android:layout_marginBottom="10dp"/>
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="GPU driver"
+        android:textColor="@color/text_secondary"
+        android:textSize="12sp"/>
+    <Spinner
+        android:id="@+id/spinner_gpu_driver"
+        android:layout_width="match_parent"
+        android:layout_height="44dp"
+        android:layout_marginBottom="12dp"/>
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="D3D wrapper"
+        android:textColor="@color/text_secondary"
+        android:textSize="12sp"/>
+    <Spinner
+        android:id="@+id/spinner_dxwrapper"
+        android:layout_width="match_parent"
+        android:layout_height="44dp"/>
+</LinearLayout>

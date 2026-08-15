@@ -1,0 +1,126 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="horizontal"
+    android:background="@color/bg_root">
+
+    <!-- Sidebar -->
+    <LinearLayout
+        android:layout_width="220dp"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:background="@color/bg_panel"
+        android:padding="16dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="NATIVE WIN\nRUNTIME"
+            android:textColor="@color/text_primary"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="6dp"/>
+
+        <TextView
+            android:id="@+id/status_pill"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="RUNTIME NOT READY"
+            android:textColor="@color/text_secondary"
+            android:textSize="11sp"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="4dp"
+            android:background="@drawable/bg_tile"
+            android:layout_marginBottom="24dp"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:gravity="center_vertical"
+            android:paddingStart="12dp"
+            android:text="Library"
+            android:textColor="@color/text_primary"
+            android:background="@drawable/bg_nav_item"
+            android:selected="true"
+            android:layout_marginBottom="8dp"/>
+
+        <TextView
+            android:id="@+id/btn_settings"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:gravity="center_vertical"
+            android:paddingStart="12dp"
+            android:text="Settings"
+            android:textColor="@color/text_secondary"
+            android:background="@drawable/bg_nav_item"
+            android:focusable="true"
+            android:clickable="true"/>
+
+        <View android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"/>
+
+        <TextView
+            android:id="@+id/selected_label"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="No program selected"
+            android:textColor="@color/text_secondary"
+            android:textSize="12sp"
+            android:layout_marginBottom="10dp"/>
+
+        <Button
+            android:id="@+id/btn_launch"
+            android:layout_width="match_parent"
+            android:layout_height="46dp"
+            android:text="LAUNCH"
+            android:textColor="@color/bg_root"
+            android:textStyle="bold"
+            android:background="@drawable/bg_button_accent"
+            android:layout_marginBottom="8dp"/>
+
+        <Button
+            android:id="@+id/btn_stop"
+            android:layout_width="match_parent"
+            android:layout_height="46dp"
+            android:text="STOP"
+            android:textColor="@color/text_primary"
+            android:background="@drawable/bg_tile"/>
+    </LinearLayout>
+
+    <!-- Main content -->
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <GridView
+            android:id="@+id/library_grid"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:numColumns="5"
+            android:horizontalSpacing="12dp"
+            android:verticalSpacing="12dp"
+            android:padding="16dp"
+            android:stretchMode="columnWidth"
+            android:gravity="center"/>
+
+        <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/divider"/>
+
+        <ScrollView
+            android:id="@+id/log_scroll"
+            android:layout_width="match_parent"
+            android:layout_height="90dp"
+            android:background="@color/bg_panel"
+            android:padding="10dp">
+            <TextView
+                android:id="@+id/log_view"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/accent"
+                android:typeface="monospace"
+                android:textSize="11sp"
+                android:text="Ready."/>
+        </ScrollView>
+    </LinearLayout>
+</LinearLayout>
