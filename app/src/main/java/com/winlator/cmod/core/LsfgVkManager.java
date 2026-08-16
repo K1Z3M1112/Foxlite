@@ -334,7 +334,7 @@ public abstract class LsfgVkManager {
         if (!armed) {
             disableLayerInContainer(container);
             envVars.put("DISABLE_LSFG", "1");
-            Log.w(TAG, "[LSFG_DIAG] applyLaunchEnv(container=" + container.name + "): NOT armed - "
+            Log.w(TAG, "[LSFG_DIAG] applyLaunchEnv(container=" + container.getName() + "): NOT armed - "
                     + "lsfgEnabledInSettings=" + isEnabled(container) + " dllPath=" + dllPath
                     + " (dllPath is null => Lossless.dll missing) -> DISABLE_LSFG=1");
             return false;
@@ -344,7 +344,7 @@ public abstract class LsfgVkManager {
         File manifestFile = new File(layerDir, MANIFEST_FILENAME);
         if (!manifestFile.isFile()) {
             envVars.put("DISABLE_LSFG", "1");
-            Log.w(TAG, "[LSFG_DIAG] applyLaunchEnv(container=" + container.name + "): NOT armed - "
+            Log.w(TAG, "[LSFG_DIAG] applyLaunchEnv(container=" + container.getName() + "): NOT armed - "
                     + "manifest missing at " + manifestFile.getAbsolutePath()
                     + " (ensureRuntimeInstalled likely wasn't called or failed before this)");
             return false;
@@ -360,7 +360,7 @@ public abstract class LsfgVkManager {
                         ? layerPath
                         : currentLayerPath + ":" + layerPath);
 
-        Log.i(TAG, "[LSFG_DIAG] LSFG armed (container=" + container.name + ") multiplier=" + multiplier(container)
+        Log.i(TAG, "[LSFG_DIAG] LSFG armed (container=" + container.getName() + ") multiplier=" + multiplier(container)
                 + " flowScale=" + flowScale(container) + " dllPath=" + dllPath
                 + " LSFG_PROCESS=" + PROCESS_EXE_IDENTIFIER + " VK_LAYER_PATH=" + envVars.get("VK_LAYER_PATH"));
         return true;
