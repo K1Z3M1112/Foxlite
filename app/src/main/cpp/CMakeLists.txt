@@ -28,11 +28,10 @@ add_subdirectory(adrenotools)
 # before building. NDK 27.0.12077973 / API 29 / arm64-v8a is what upstream
 # integrators (GameNative) build this against.
 #
-# NOTE: the exact CMake target name below (lsfg-vk) and its cache options
-# are taken from upstream lsfg-vk's public 1.0.0 CMakeLists.txt and from
-# published integration notes, since this sandbox has no network access to
-# check out the submodule and verify it directly. Confirm the target name
-# once the submodule is checked out and adjust if it differs.
+# NOTE: the target name below (lsfg-vk) is confirmed correct against a real
+# CI build of this submodule (see git history / build logs) - the earlier
+# failure here was a CMake add_custom_command(TARGET...) directory-scope
+# restriction, not a wrong target name. See the comment further down.
 set(LSFGVK_ANDROID_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lsfg-vk-android")
 if(EXISTS "${LSFGVK_ANDROID_SRC_DIR}/CMakeLists.txt")
     set(LSFGVK_ANDROID_WINE ON CACHE BOOL "" FORCE)
@@ -41,14 +40,21 @@ if(EXISTS "${LSFGVK_ANDROID_SRC_DIR}/CMakeLists.txt")
 
     if(TARGET lsfg-vk)
         # Upstream's target/output is liblsfg-vk.so; LsfgVkManager expects
-        # liblsfg-vk-layer.so alongside it as a plain copy under jniLibs so
-        # Gradle packages it with the rest of the app's native libraries
-        # (no manual asset staging - see LsfgVkManager.ensureRuntimeInstalled).
-        add_custom_command(TARGET lsfg-vk POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy
-                    $<TARGET_FILE:lsfg-vk>
-                    ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/liblsfg-vk-layer.so
-            COMMENT "Staging liblsfg-vk-layer.so for packaging")
+        # liblsfg-vk-layer.so so Gradle packages it under that name alongside
+        # the rest of the app's native libraries (no manual asset staging -
+        # see LsfgVkManager.ensureRuntimeInstalled).
+        #
+        # NOTE: add_custom_command(TARGET <name> POST_BUILD ...) only works
+        # when <name> was created in the SAME directory scope as the call -
+        # it cannot reference a target defined inside a CMakeLists.txt pulled
+        # in via add_subdirectory() (that's this submodule). CI confirmed the
+        # exact failure this causes:
+        #   CMake Error at CMakeLists.txt:47 (add_custom_command):
+        #     TARGET 'lsfg-vk' was not created in this directory.
+        # set_target_properties() has no such restriction, so rename the
+        # build output directly instead of trying to copy it after the fact.
+        set_target_properties(lsfg-vk PROPERTIES
+            OUTPUT_NAME "lsfg-vk-layer")
     else()
         message(WARNING "lsfg-vk-android was added but no 'lsfg-vk' target was found - "
                          "check the submodule's CMakeLists.txt and update the target name here.")
@@ -126,7 +132,7 @@ add_custom_command(
             ${CMAKE_CURRENT_BINARY_DIR}/window_vert.h
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/winlator/window.vert
             ${CMAKE_CURRENT_SOURCE_DIR}/winlator/gen_shader_header.sh
-    COMMENT "Compiling window.vert → window_vert.h"
+    COMMENT "Compiling window.vert โ’ window_vert.h"
 )
 
 add_custom_command(
@@ -137,7 +143,7 @@ add_custom_command(
             ${CMAKE_CURRENT_BINARY_DIR}/window_frag.h
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/winlator/window.frag
             ${CMAKE_CURRENT_SOURCE_DIR}/winlator/gen_shader_header.sh
-    COMMENT "Compiling window.frag → window_frag.h"
+    COMMENT "Compiling window.frag โ’ window_frag.h"
 )
 
 add_custom_command(
@@ -148,7 +154,7 @@ add_custom_command(
             ${CMAKE_CURRENT_BINARY_DIR}/window_sgsr_frag.h
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/winlator/window_sgsr.frag
             ${CMAKE_CURRENT_SOURCE_DIR}/winlator/gen_shader_header.sh
-    COMMENT "Compiling window_sgsr.frag → window_sgsr_frag.h"
+    COMMENT "Compiling window_sgsr.frag โ’ window_sgsr_frag.h"
 )
 
 add_custom_command(
@@ -159,7 +165,7 @@ add_custom_command(
             ${CMAKE_CURRENT_BINARY_DIR}/window_nis_frag.h
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/winlator/window_nis.frag
             ${CMAKE_CURRENT_SOURCE_DIR}/winlator/gen_shader_header.sh
-    COMMENT "Compiling window_nis.frag → window_nis_frag.h"
+    COMMENT "Compiling window_nis.frag โ’ window_nis_frag.h"
 )
 
 add_custom_command(
@@ -170,7 +176,7 @@ add_custom_command(
             ${CMAKE_CURRENT_BINARY_DIR}/window_legacy_upscale_frag.h
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/winlator/window_legacy_upscale.frag
             ${CMAKE_CURRENT_SOURCE_DIR}/winlator/gen_shader_header.sh
-    COMMENT "Compiling window_legacy_upscale.frag → window_legacy_upscale_frag.h"
+    COMMENT "Compiling window_legacy_upscale.frag โ’ window_legacy_upscale_frag.h"
 )
 
 add_custom_command(
@@ -181,7 +187,7 @@ add_custom_command(
             ${CMAKE_CURRENT_BINARY_DIR}/window_stretch_frag.h
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/winlator/window_stretch.frag
             ${CMAKE_CURRENT_SOURCE_DIR}/winlator/gen_shader_header.sh
-    COMMENT "Compiling window_stretch.frag → window_stretch_frag.h"
+    COMMENT "Compiling window_stretch.frag โ’ window_stretch_frag.h"
 )
 
 add_custom_command(
@@ -192,7 +198,7 @@ add_custom_command(
             ${CMAKE_CURRENT_BINARY_DIR}/window_postfx_frag.h
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/winlator/window_postfx.frag
             ${CMAKE_CURRENT_SOURCE_DIR}/winlator/gen_shader_header.sh
-    COMMENT "Compiling window_postfx.frag → window_postfx_frag.h"
+    COMMENT "Compiling window_postfx.frag โ’ window_postfx_frag.h"
 )
 
 add_custom_command(
@@ -260,7 +266,7 @@ target_link_libraries(vulkan_renderer
         atomic
 )
 
-# SurfaceFlinger (ASurfaceRenderer / ASR) host renderer — ported from
+# SurfaceFlinger (ASurfaceRenderer / ASR) host renderer โ€” ported from
 # Bannerlator's native target. This repo already has the Java side; wire the
 # missing JNI/C++ library back into the build so ASurfaceRenderer can load.
 add_library(asurface_renderer SHARED
