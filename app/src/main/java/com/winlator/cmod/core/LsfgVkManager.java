@@ -1,0 +1,571 @@
+package com.winlator.cmod.core;
+
+import android.content.Context;
+import android.net.Uri;
+import android.util.Log;
+
+import com.winlator.cmod.container.Container;
+import com.winlator.cmod.container.Shortcut;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.util.Locale;
+
+public abstract class LsfgVkManager {
+    private static final String TAG = "LsfgVkManager";
+    // liblsfg-vk-layer.so is no longer read from assets/ - there is no
+    // prebuilt binary shipped in that location, and copying random source
+    // files there (as this project used to) doesn't produce a working
+    // layer. It is now built by CMake from the lsfg-vk-android submodule
+    // (see app/src/main/cpp/CMakeLists.txt) and packaged by Gradle like any
+    // other native library, which puts it in the app's own
+    // nativeLibraryDir at install time - so we read it from there.
+    private static final String CONFIG_RELATIVE_PATH = ".config/lsfg-vk/conf.toml";
+    private static final String DLL_RELATIVE_DIR = ".local/share/lsfg-vk";
+    private static final String LAYER_RELATIVE_DIR = ".local/share/vulkan/implicit_layer.d";
+    private static final String LIB_RELATIVE_DIR = ".local/lib";
+    private static final String LIB_FILENAME = "liblsfg-vk-layer.so";
+    private static final String MANIFEST_FILENAME = "VkLayer_LS_frame_generation.json";
+    private static final String VERSION_FILENAME = ".lsfg_vk_runtime_version";
+    private static final String LOSSLESS_DLL_NAME = "Lossless.dll";
+    private static final String PROCESS_EXE_IDENTIFIER = "winlator-lsfg";
+    private static final String PRESENT_MODE = "fifo";
+    private static final String RUNTIME_VERSION = "v1.4.0-android-arm64-v8a-ahb-no-props";
+
+    public static final String EXTRA_ENABLED = "lsfgEnabled";
+    public static final String EXTRA_MULTIPLIER = "lsfgMultiplier";
+    public static final String EXTRA_FLOW_SCALE = "lsfgFlowScale";
+    public static final String EXTRA_PERFORMANCE_MODE = "lsfgPerformanceMode";
+    public static final String EXTRA_FP16 = "lsfgFp16";
+
+    private LsfgVkManager() {}
+
+    public static boolean isGlobalDllAvailable(Context context) {
+        File dllFile = globalDllFile(context);
+        return dllFile != null && dllFile.isFile() && dllFile.length() > 0;
+    }
+
+    public static File globalDllFile(Context context) {
+        if (context == null) return null;
+        return new File(context.getFilesDir(), "lsfg-vk/" + LOSSLESS_DLL_NAME);
+    }
+
+    public static String globalDllPath(Context context) {
+        File dllFile = globalDllFile(context);
+        return dllFile != null && dllFile.isFile() && dllFile.length() > 0 ? dllFile.getAbsolutePath() : null;
+    }
+
+    public static boolean importGlobalLosslessDll(Context context, Uri uri) {
+        if (context == null || uri == null) return false;
+        File dst = globalDllFile(context);
+        if (dst == null) return false;
+        File parent = dst.getParentFile();
+        if (parent != null) parent.mkdirs();
+        return copyUriTo(context, uri, dst);
+    }
+
+    public static File containerDllFile(Container container) {
+        if (container == null || container.getRootDir() == null) return null;
+        return new File(container.getRootDir(), DLL_RELATIVE_DIR + "/" + LOSSLESS_DLL_NAME);
+    }
+
+    public static String containerDllPath(Container container) {
+        File dllFile = containerDllFile(container);
+        return dllFile != null && dllFile.isFile() ? dllFile.getAbsolutePath() : null;
+    }
+
+    public static File containerDllFile(Shortcut shortcut) {
+        return shortcut == null ? null : containerDllFile(shortcut.container);
+    }
+
+    public static String containerDllPath(Shortcut shortcut) {
+        File dllFile = containerDllFile(shortcut);
+        return dllFile != null && dllFile.isFile() ? dllFile.getAbsolutePath() : null;
+    }
+
+    public static String layerDirPath(Container container) {
+        if (container == null || container.getRootDir() == null) return null;
+        return new File(container.getRootDir(), LAYER_RELATIVE_DIR).getAbsolutePath();
+    }
+
+    public static String layerDirPath(Shortcut shortcut) {
+        return shortcut == null ? null : layerDirPath(shortcut.container);
+    }
+
+    public static String configPath(Container container) {
+        if (container == null || container.getRootDir() == null) return null;
+        return configFile(container).getAbsolutePath();
+    }
+
+    public static String configPath(Shortcut shortcut) {
+        return shortcut == null ? null : configPath(shortcut.container);
+    }
+
+    public static boolean isEnabled(Container container) {
+        return container != null && container.isLsfgEnabled();
+    }
+
+    public static boolean isEnabled(Shortcut shortcut) {
+        return shortcut != null && shortcut.isLsfgEnabled();
+    }
+
+    public static boolean isArmed(Container container) {
+        return isEnabled(container) && containerDllPath(container) != null;
+    }
+
+    public static boolean isArmed(Shortcut shortcut) {
+        return isEnabled(shortcut) && containerDllPath(shortcut) != null;
+    }
+
+    public static int multiplier(Container container) {
+        return container != null ? container.getLsfgMultiplier() : 0;
+    }
+
+    public static int multiplier(Shortcut shortcut) {
+        return shortcut != null ? shortcut.getLsfgMultiplier() : 0;
+    }
+
+    public static float flowScale(Container container) {
+        return container != null ? container.getLsfgFlowScale() : 0.80f;
+    }
+
+    public static float flowScale(Shortcut shortcut) {
+        return shortcut != null ? shortcut.getLsfgFlowScale() : 0.80f;
+    }
+
+    public static boolean performanceMode(Container container) {
+        return container == null || container.getLsfgPerformanceMode();
+    }
+
+    public static boolean performanceMode(Shortcut shortcut) {
+        return shortcut == null || shortcut.getLsfgPerformanceMode();
+    }
+
+    public static boolean fp16(Container container) {
+        return container == null || container.getLsfgFp16();
+    }
+
+    public static boolean fp16(Shortcut shortcut) {
+        return shortcut == null || shortcut.getLsfgFp16();
+    }
+
+    // Path inside assets/ where a prebuilt liblsfg-vk-layer.so can be shipped when the
+    // lsfg-vk-android submodule isn't built by CMake (e.g. submodule missing at build
+    // time). This is a plain-file fallback, not an APK native lib, so it's extracted to
+    // internal storage on first use - see assetLayerLibFile().
+    private static final String ASSET_LIB_PATH = "lsfg_vk/" + LIB_FILENAME;
+
+    /**
+     * @return the compiled liblsfg-vk-layer.so shipped inside this APK's own native
+     * library directory (produced by the lsfg-vk-android CMake target - see
+     * app/src/main/cpp/CMakeLists.txt), or null if it was never built. Unlike the old
+     * assets/ path, this never silently points at a file that doesn't exist: either
+     * the native build produced it and Gradle packaged it, or it's genuinely absent
+     * and callers need to know that instead of pretending frame gen is available.
+     */
+    private static File builtLayerLibFile(Context context) {
+        if (context == null || context.getApplicationInfo() == null) return null;
+        String nativeLibDir = context.getApplicationInfo().nativeLibraryDir;
+        if (nativeLibDir == null) return null;
+        return new File(nativeLibDir, LIB_FILENAME);
+    }
+
+    /**
+     * @return liblsfg-vk-layer.so extracted from assets/lsfg_vk/ into internal storage,
+     * or null if no such asset was bundled. Used as a fallback when the CMake build
+     * didn't produce a native copy (e.g. lsfg-vk-android submodule wasn't checked out).
+     * Extraction is cached and re-run only if the cached copy is missing or a different
+     * size than the asset, so this is cheap to call on every ensureRuntimeInstalled().
+     */
+    private static File assetLayerLibFile(Context context) {
+        if (context == null) return null;
+        File dst = new File(context.getFilesDir(), "lsfg-vk/" + LIB_FILENAME);
+        try {
+            long assetLength;
+            try (android.content.res.AssetFileDescriptor afd = context.getAssets().openFd(ASSET_LIB_PATH)) {
+                assetLength = afd.getLength();
+            }
+            if (!dst.isFile() || dst.length() != assetLength) {
+                File parent = dst.getParentFile();
+                if (parent != null) parent.mkdirs();
+                FileUtils.copy(context, ASSET_LIB_PATH, dst);
+                FileUtils.chmod(dst, 0644);
+                Log.i(TAG, "[LSFG_DIAG] extracted liblsfg-vk-layer.so from assets -> " + dst.getAbsolutePath()
+                        + " size=" + dst.length());
+            }
+            return dst.isFile() && dst.length() > 0 ? dst : null;
+        } catch (java.io.IOException e) {
+            // Asset not present - not an error, just means no fallback was bundled.
+            return null;
+        }
+    }
+
+    /**
+     * @return the layer .so to install, preferring the CMake-built native copy and
+     * falling back to the one bundled in assets/lsfg_vk/ if present.
+     */
+    private static File resolveLayerLibFile(Context context) {
+        File built = builtLayerLibFile(context);
+        if (built != null && built.isFile() && built.length() > 0) return built;
+        return assetLayerLibFile(context);
+    }
+
+    public static boolean isRuntimeBuilt(Context context) {
+        File lib = resolveLayerLibFile(context);
+        return lib != null && lib.isFile() && lib.length() > 0;
+    }
+
+    public static boolean ensureRuntimeInstalled(Context context, Container container) {
+        if (context == null || container == null || container.getRootDir() == null) {
+            Log.w(TAG, "[LSFG_DIAG] ensureRuntimeInstalled: aborted, context/container/rootDir is null");
+            return false;
+        }
+
+        File builtLib = resolveLayerLibFile(context);
+        if (builtLib == null || !builtLib.isFile() || builtLib.length() == 0) {
+            // Nothing to install: the lsfg-vk-android submodule wasn't checked out/built
+            // (so this APK never got a real layer .so packaged into its native lib dir),
+            // and no fallback .so was bundled at assets/lsfg_vk/liblsfg-vk-layer.so either.
+            Log.e(TAG, "[LSFG_DIAG] liblsfg-vk-layer.so was not found in " + context.getApplicationInfo().nativeLibraryDir
+                    + " or in assets/" + ASSET_LIB_PATH
+                    + " - build app/src/main/cpp/lsfg-vk-android or bundle a prebuilt .so in assets.");
+            return false;
+        }
+        Log.i(TAG, "[LSFG_DIAG] found layer .so at " + builtLib.getAbsolutePath() + " (" + builtLib.length() + " bytes)");
+
+        File rootDir = container.getRootDir();
+        File localLibDir = new File(rootDir, LIB_RELATIVE_DIR);
+        File layerDir = new File(rootDir, LAYER_RELATIVE_DIR);
+        File dllDir = new File(rootDir, DLL_RELATIVE_DIR);
+        File libFile = new File(localLibDir, LIB_FILENAME);
+        File manifestFile = new File(layerDir, MANIFEST_FILENAME);
+        File versionFile = new File(layerDir, VERSION_FILENAME);
+
+        String installedVersion = versionFile.isFile() ? FileUtils.readString(versionFile).trim() : "";
+        boolean needsInstall = !RUNTIME_VERSION.equals(installedVersion)
+                || !libFile.isFile() || libFile.length() != builtLib.length() || !manifestFile.isFile();
+        boolean success = true;
+
+        if (needsInstall) {
+            Log.i(TAG, "[LSFG_DIAG] installing layer into container (installedVersion=\"" + installedVersion
+                    + "\" wantedVersion=\"" + RUNTIME_VERSION + "\") -> " + libFile.getAbsolutePath());
+            try {
+                localLibDir.mkdirs();
+                layerDir.mkdirs();
+                FileUtils.copy(builtLib, libFile);
+                FileUtils.writeString(manifestFile, buildLayerManifestJson(libFile));
+                FileUtils.writeString(versionFile, RUNTIME_VERSION);
+                FileUtils.chmod(libFile, 0755);
+                FileUtils.chmod(manifestFile, 0644);
+                FileUtils.chmod(versionFile, 0644);
+                success = libFile.isFile() && manifestFile.isFile();
+                Log.i(TAG, "[LSFG_DIAG] install " + (success ? "OK" : "FAILED")
+                        + " - lib=" + libFile.isFile() + " manifest=" + manifestFile.isFile());
+            } catch (Throwable t) {
+                Log.e(TAG, "[LSFG_DIAG] Failed to install LSFG runtime", t);
+                success = false;
+            }
+        } else {
+            Log.i(TAG, "[LSFG_DIAG] layer already up to date in container, skipping reinstall");
+        }
+
+        File globalDll = globalDllFile(context);
+        File dllFile = new File(dllDir, LOSSLESS_DLL_NAME);
+        if (globalDll == null || !globalDll.isFile()) {
+            Log.w(TAG, "[LSFG_DIAG] no global Lossless.dll imported yet (Settings > import Lossless.dll) - "
+                    + "frame gen will stay DISABLED for every container/shortcut until you import it.");
+        }
+        if (globalDll != null && globalDll.isFile()) {
+            try {
+                if (!dllFile.isFile() || dllFile.length() != globalDll.length()) {
+                    dllDir.mkdirs();
+                    FileUtils.copy(globalDll, dllFile);
+                    FileUtils.chmod(dllFile, 0644);
+                    Log.i(TAG, "[LSFG_DIAG] copied Lossless.dll into container -> " + dllFile.getAbsolutePath());
+                } else {
+                    Log.i(TAG, "[LSFG_DIAG] Lossless.dll already present in container -> " + dllFile.getAbsolutePath());
+                }
+                return success;
+            } catch (Throwable t) {
+                Log.e(TAG, "[LSFG_DIAG] Failed to copy Lossless.dll into container", t);
+                return false;
+            }
+        }
+
+        return !isEnabled(container) && success;
+    }
+
+    public static boolean ensureRuntimeInstalled(Context context, Shortcut shortcut) {
+        return shortcut != null && ensureRuntimeInstalled(context, shortcut.container);
+    }
+
+    public static boolean writeConfig(Container container) {
+        if (container == null || container.getRootDir() == null) return false;
+
+        String dllPath = containerDllPath(container);
+        boolean enabled = isEnabled(container) && dllPath != null;
+        File configFile = configFile(container);
+        File parent = configFile.getParentFile();
+        if (parent != null) parent.mkdirs();
+
+        String config = buildConfigToml(dllPath, enabled, multiplier(container), flowScale(container), performanceMode(container), fp16(container));
+        boolean ok = FileUtils.writeString(configFile, config);
+        if (ok) FileUtils.chmod(configFile, 0644);
+        Log.i(TAG, "[LSFG_DIAG] writeConfig(container): enabled=" + enabled + " dllPath=" + dllPath
+                + " -> " + configFile.getAbsolutePath() + " ok=" + ok);
+        return ok;
+    }
+
+    public static boolean writeConfig(Shortcut shortcut) {
+        if (shortcut == null || shortcut.container == null || shortcut.container.getRootDir() == null) return false;
+
+        String dllPath = containerDllPath(shortcut);
+        boolean enabled = isEnabled(shortcut) && dllPath != null;
+        File configFile = configFile(shortcut.container);
+        File parent = configFile.getParentFile();
+        if (parent != null) parent.mkdirs();
+
+        String config = buildConfigToml(dllPath, enabled, multiplier(shortcut), flowScale(shortcut), performanceMode(shortcut), fp16(shortcut));
+        boolean ok = FileUtils.writeString(configFile, config);
+        if (ok) FileUtils.chmod(configFile, 0644);
+        Log.i(TAG, "[LSFG_DIAG] writeConfig(shortcut=" + shortcut.name + "): enabled=" + enabled + " dllPath=" + dllPath
+                + " -> " + configFile.getAbsolutePath() + " ok=" + ok);
+        return ok;
+    }
+
+    public static boolean updateConfigAtRuntime(Container container, boolean enabled, int multiplier, float flowScale, boolean performanceMode) {
+        return updateConfigAtRuntime(container, enabled, multiplier, flowScale, performanceMode, fp16(container));
+    }
+
+    public static boolean updateConfigAtRuntime(Container container, boolean enabled, int multiplier, float flowScale, boolean performanceMode, boolean fp16) {
+        if (container == null || container.getRootDir() == null) return false;
+
+        String dllPath = containerDllPath(container);
+        File configFile = configFile(container);
+        if (!configFile.isFile()) return false;
+
+        boolean active = enabled && dllPath != null;
+        int effectiveMultiplier = active ? Math.max(2, Math.min(4, multiplier)) : 1;
+        boolean perfMode = active && performanceMode;
+        boolean ok = FileUtils.writeString(configFile, buildConfigToml(dllPath, active, effectiveMultiplier, flowScale, perfMode, fp16));
+        if (ok) FileUtils.chmod(configFile, 0644);
+        return ok;
+    }
+
+    public static boolean updateConfigAtRuntime(Shortcut shortcut, boolean enabled, int multiplier, float flowScale, boolean performanceMode) {
+        return updateConfigAtRuntime(shortcut, enabled, multiplier, flowScale, performanceMode, fp16(shortcut));
+    }
+
+    public static boolean updateConfigAtRuntime(Shortcut shortcut, boolean enabled, int multiplier, float flowScale, boolean performanceMode, boolean fp16) {
+        if (shortcut == null || shortcut.container == null || shortcut.container.getRootDir() == null) return false;
+
+        String dllPath = containerDllPath(shortcut);
+        File configFile = configFile(shortcut.container);
+        if (!configFile.isFile()) return false;
+
+        boolean active = enabled && dllPath != null;
+        int effectiveMultiplier = active ? Math.max(2, Math.min(4, multiplier)) : 1;
+        boolean perfMode = active && performanceMode;
+        boolean ok = FileUtils.writeString(configFile, buildConfigToml(dllPath, active, effectiveMultiplier, flowScale, perfMode, fp16));
+        if (ok) FileUtils.chmod(configFile, 0644);
+        return ok;
+    }
+
+    public static boolean applyLaunchEnv(Container container, EnvVars envVars) {
+        if (container == null || envVars == null || container.getRootDir() == null) return false;
+
+        clearLaunchEnv(envVars);
+
+        String dllPath = containerDllPath(container);
+        boolean armed = isEnabled(container) && dllPath != null;
+        if (!armed) {
+            disableLayerInContainer(container);
+            envVars.put("DISABLE_LSFG", "1");
+            Log.w(TAG, "[LSFG_DIAG] applyLaunchEnv(container=" + container.getName() + "): NOT armed - "
+                    + "lsfgEnabledInSettings=" + isEnabled(container) + " dllPath=" + dllPath
+                    + " (dllPath is null => Lossless.dll missing) -> DISABLE_LSFG=1");
+            return false;
+        }
+
+        File layerDir = new File(container.getRootDir(), LAYER_RELATIVE_DIR);
+        File manifestFile = new File(layerDir, MANIFEST_FILENAME);
+        if (!manifestFile.isFile()) {
+            envVars.put("DISABLE_LSFG", "1");
+            Log.w(TAG, "[LSFG_DIAG] applyLaunchEnv(container=" + container.getName() + "): NOT armed - "
+                    + "manifest missing at " + manifestFile.getAbsolutePath()
+                    + " (ensureRuntimeInstalled likely wasn't called or failed before this)");
+            return false;
+        }
+
+        applyLaunchOverrides(envVars, configFile(container).getAbsolutePath(), dllPath,
+                multiplier(container), flowScale(container), performanceMode(container));
+
+        String currentLayerPath = envVars.get("VK_LAYER_PATH");
+        String layerPath = layerDir.getAbsolutePath();
+        envVars.put("VK_LAYER_PATH",
+                currentLayerPath == null || currentLayerPath.isEmpty()
+                        ? layerPath
+                        : currentLayerPath + ":" + layerPath);
+
+        Log.i(TAG, "[LSFG_DIAG] LSFG armed (container=" + container.getName() + ") multiplier=" + multiplier(container)
+                + " flowScale=" + flowScale(container) + " dllPath=" + dllPath
+                + " LSFG_PROCESS=" + PROCESS_EXE_IDENTIFIER + " VK_LAYER_PATH=" + envVars.get("VK_LAYER_PATH"));
+        return true;
+    }
+
+    public static boolean applyLaunchEnv(Shortcut shortcut, EnvVars envVars) {
+        if (shortcut == null || shortcut.container == null || envVars == null || shortcut.container.getRootDir() == null) return false;
+
+        clearLaunchEnv(envVars);
+
+        String dllPath = containerDllPath(shortcut);
+        boolean armed = isEnabled(shortcut) && dllPath != null;
+        if (!armed) {
+            disableLayerInContainer(shortcut.container);
+            envVars.put("DISABLE_LSFG", "1");
+            Log.w(TAG, "[LSFG_DIAG] applyLaunchEnv(shortcut=" + shortcut.name + "): NOT armed - "
+                    + "lsfgEnabledInSettings=" + isEnabled(shortcut) + " dllPath=" + dllPath
+                    + " (dllPath is null => Lossless.dll missing) -> DISABLE_LSFG=1");
+            return false;
+        }
+
+        File layerDir = new File(shortcut.container.getRootDir(), LAYER_RELATIVE_DIR);
+        File manifestFile = new File(layerDir, MANIFEST_FILENAME);
+        if (!manifestFile.isFile()) {
+            envVars.put("DISABLE_LSFG", "1");
+            Log.w(TAG, "[LSFG_DIAG] applyLaunchEnv(shortcut=" + shortcut.name + "): NOT armed - "
+                    + "manifest missing at " + manifestFile.getAbsolutePath()
+                    + " (ensureRuntimeInstalled likely wasn't called or failed before this)");
+            return false;
+        }
+
+        applyLaunchOverrides(envVars, configFile(shortcut.container).getAbsolutePath(), dllPath,
+                multiplier(shortcut), flowScale(shortcut), performanceMode(shortcut));
+
+        String currentLayerPath = envVars.get("VK_LAYER_PATH");
+        String layerPath = layerDir.getAbsolutePath();
+        envVars.put("VK_LAYER_PATH",
+                currentLayerPath == null || currentLayerPath.isEmpty()
+                        ? layerPath
+                        : currentLayerPath + ":" + layerPath);
+
+        Log.i(TAG, "[LSFG_DIAG] LSFG armed (shortcut=" + shortcut.name + ") multiplier=" + multiplier(shortcut)
+                + " flowScale=" + flowScale(shortcut) + " dllPath=" + dllPath
+                + " LSFG_PROCESS=" + PROCESS_EXE_IDENTIFIER + " VK_LAYER_PATH=" + envVars.get("VK_LAYER_PATH"));
+        return true;
+    }
+
+    private static File configFile(Container container) {
+        return new File(container.getRootDir(), CONFIG_RELATIVE_PATH);
+    }
+
+    public static void clearLaunchEnv(EnvVars envVars) {
+        envVars.remove("DISABLE_LSFG");
+        envVars.remove("LSFG_CONFIG");
+        envVars.remove("LSFG_PROCESS");
+        envVars.remove("LSFG_PROCESS_EXE");
+        envVars.remove("LSFG_DLL_PATH_UNIX");
+        envVars.remove("LSFG_MULTIPLIER");
+        envVars.remove("LSFG_FLOW_SCALE");
+        envVars.remove("LSFG_PERFORMANCE_MODE");
+        envVars.remove("LSFG_HDR_MODE");
+        envVars.remove("LSFG_EXPERIMENTAL_PRESENT_MODE");
+    }
+
+    private static void applyLaunchOverrides(EnvVars envVars, String configPath, String dllPath,
+                                             int multiplier, float flowScale, boolean performanceMode) {
+        envVars.put("LSFG_CONFIG", configPath);
+        envVars.put("LSFG_PROCESS", PROCESS_EXE_IDENTIFIER);
+        envVars.put("LSFG_PROCESS_EXE", PROCESS_EXE_IDENTIFIER);
+        envVars.put("LSFG_DLL_PATH_UNIX", dllPath);
+        envVars.put("LSFG_MULTIPLIER", Math.max(2, Math.min(4, multiplier)));
+        envVars.put("LSFG_FLOW_SCALE", String.format(Locale.US, "%.2f", Math.max(0.25f, Math.min(1.0f, flowScale))));
+        envVars.put("LSFG_PERFORMANCE_MODE", performanceMode ? "1" : "0");
+        envVars.put("LSFG_HDR_MODE", "0");
+        envVars.put("LSFG_EXPERIMENTAL_PRESENT_MODE", PRESENT_MODE);
+    }
+
+    private static void disableLayerInContainer(Container container) {
+        File manifest = new File(container.getRootDir(), LAYER_RELATIVE_DIR + "/" + MANIFEST_FILENAME);
+        if (manifest.exists() && !manifest.delete()) {
+            Log.w(TAG, "Failed to remove disabled LSFG manifest: " + manifest);
+        }
+    }
+
+    private static String buildConfigToml(String dllPath, boolean enabled, int multiplier, float flowScale, boolean performanceMode, boolean fp16) {
+        StringBuilder builder = new StringBuilder();
+        builder.append("version = 1\n\n");
+        builder.append("[global]\n");
+        if (dllPath != null && !dllPath.isEmpty()) {
+            builder.append("dll = ").append(tomlString(dllPath)).append('\n');
+        }
+        builder.append("no_fp16 = ").append(fp16 ? "false" : "true").append("\n\n");
+
+        if (enabled && dllPath != null && !dllPath.isEmpty()) {
+            builder.append("[[game]]\n");
+            builder.append("exe = ").append(tomlString(PROCESS_EXE_IDENTIFIER)).append('\n');
+            builder.append("multiplier = ").append(Math.max(1, Math.min(4, multiplier))).append('\n');
+            builder.append("flow_scale = ").append(String.format(Locale.US, "%.2f", Math.max(0.25f, Math.min(1.0f, flowScale)))).append('\n');
+            builder.append("performance_mode = ").append(performanceMode ? "true" : "false").append('\n');
+            builder.append("hdr_mode = false\n");
+            builder.append("experimental_present_mode = ").append(tomlString(PRESENT_MODE)).append('\n');
+        }
+
+        return builder.toString();
+    }
+
+    private static String tomlString(String value) {
+        return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+    }
+
+    /**
+     * Builds the Vulkan implicit-layer manifest pointing at the installed layer .so
+     * using an absolute library_path, so it resolves regardless of where inside the
+     * container this manifest ends up relative to the .so - avoiding the relative
+     * "../../../lib/" resolution some other integrations rely on.
+     */
+    private static String buildLayerManifestJson(File installedLibFile) {
+        return "{\n"
+                + "  \"file_format_version\": \"1.0.0\",\n"
+                + "  \"layer\": {\n"
+                + "    \"name\": \"VK_LAYER_LS_frame_generation\",\n"
+                + "    \"type\": \"GLOBAL\",\n"
+                + "    \"api_version\": \"1.4.313\",\n"
+                + "    \"library_path\": " + jsonString(installedLibFile.getAbsolutePath()) + ",\n"
+                + "    \"implementation_version\": \"1\",\n"
+                + "    \"description\": \"Lossless Scaling frame generation layer\",\n"
+                + "    \"functions\": {\n"
+                + "      \"vkGetInstanceProcAddr\": \"layer_vkGetInstanceProcAddr\",\n"
+                + "      \"vkGetDeviceProcAddr\": \"layer_vkGetDeviceProcAddr\"\n"
+                + "    },\n"
+                + "    \"disable_environment\": {\n"
+                + "      \"DISABLE_LSFG\": \"1\"\n"
+                + "    }\n"
+                + "  }\n"
+                + "}\n";
+    }
+
+    private static String jsonString(String value) {
+        return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+    }
+
+    private static boolean copyUriTo(Context context, Uri uri, File dst) {
+        try (InputStream in = context.getContentResolver().openInputStream(uri)) {
+            if (in == null) return false;
+            try (FileOutputStream out = new FileOutputStream(dst)) {
+                byte[] buffer = new byte[0x20000];
+                int read;
+                while ((read = in.read(buffer)) > 0) {
+                    out.write(buffer, 0, read);
+                }
+            }
+            FileUtils.chmod(dst, 0644);
+            Log.i(TAG, "Imported Lossless.dll to " + dst.getAbsolutePath() + " size=" + dst.length());
+            return dst.isFile() && dst.length() > 0;
+        } catch (Throwable t) {
+            Log.e(TAG, "Failed to import Lossless.dll", t);
+            return false;
+        }
+    }
+}
